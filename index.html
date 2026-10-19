@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crumb Clicker</title>
+<style>
+:root{--bg:#2b1a12;--panel:#3a2419;--line:#5a3a28;--text:#f6e7d3;--dim:#b99a7e;--accent:#f2b34a;--ok:#8fd694;--bad:#ff8a7a}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--text);font:16px/1.4 Georgia,"Times New Roman",serif;display:grid;grid-template-columns:minmax(260px,1fr) minmax(280px,360px);height:100vh;overflow:hidden}
+@media(max-width:700px){body{grid-template-columns:1fr;grid-template-rows:auto 1fr;overflow:auto;height:auto}}
+#left{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;gap:10px;text-align:center}
+#count{font-size:clamp(32px,6vw,52px);font-weight:bold}
+#cps{color:var(--dim)}
+#cookie{width:min(52vw,260px);aspect-ratio:1;border-radius:50%;border:0;cursor:pointer;background:radial-gradient(circle at 35% 30%,#e8b36b,#b9772f 70%);box-shadow:inset -10px -14px 24px rgba(60,25,5,.45),0 8px 0 #7b4a1c;position:relative;transition:transform .06s;-webkit-tap-highlight-color:transparent}
+#cookie:active{transform:scale(.95)}
+#cookie i{position:absolute;width:11%;height:11%;border-radius:50%;background:#4a2610}
+.float{position:fixed;pointer-events:none;font-weight:bold;color:var(--accent);animation:up .9s ease-out forwards}
+@keyframes up{to{transform:translateY(-70px);opacity:0}}
+#right{background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;padding:12px}
+@media(max-width:700px){#right{border-left:0;border-top:1px solid var(--line);overflow:visible}}
+h2{font-size:15px;margin:10px 4px 6px;color:var(--dim);font-weight:normal}
+.item{display:flex;justify-content:space-between;align-items:center;width:100%;text-align:left;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:9px 12px;margin-bottom:6px;cursor:pointer;font:inherit}
+.item:disabled{opacity:.45;cursor:not-allowed}
+.item:not(:disabled):hover{border-color:var(--accent)}
+.item small{display:block;color:var(--dim)}
+.item b{font-size:20px;color:var(--accent);min-width:28px;text-align:right}
+.tools{display:flex;gap:6px;margin-top:10px}
+.tools button{flex:1;background:none;color:var(--dim);border:1px solid var(--line);border-radius:6px;padding:6px;cursor:pointer;font:inherit;font-size:13px}
+#admin{position:fixed;left:0;right:0;bottom:0;background:#150c07;border-top:2px solid var(--accent);padding:10px;display:none;z-index:9;font:14px/1.4 ui-monospace,Menlo,Consolas,monospace}
+#log{height:130px;overflow-y:auto;white-space:pre-wrap;margin-bottom:6px}
+#cmd{width:100%;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:8px;font:inherit}
+.ok{color:var(--ok)}.bad{color:var(--bad)}
+</style>
+</head>
+<body>
+<div id="left">
+  <div id="count">0 cookies</div>
+  <div id="cps">0 per second</div>
+  <button id="cookie" aria-label="Bake a cookie"><i style="left:25%;top:22%"></i><i style="left:58%;top:30%"></i><i style="left:34%;top:56%"></i><i style="left:64%;top:62%"></i><i style="left:46%;top:42%;width:8%;height:8%"></i></button>
+  <div style="color:var(--dim);font-size:13px">Press <kbd>`</kbd> to open the admin console</div>
+</div>
+<div id="right">
+  <h2>Upgrades</h2><div id="ups"></div>
+  <h2>Buildings</h2><div id="blds"></div>
+  <div class="tools"><button id="save">Save</button><button id="reset">Reset</button><button id="adm">Admin</button></div>
+</div>
+<div id="admin"><div id="log"></div><input id="cmd" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="type a command, or help"></div>
+
+<script>
+// Change this password before publishing. It is client-side only, so it keeps casual visitors out, not determined ones.
+const ADMIN_PASSWORD = "admin";
+
+const B = [
+  {id:"cursor",  n:"Cursor",  base:15,      cps:0.1},
+  {id:"grandma", n:"Grandma", base:100,     cps:1},
+  {id:"farm",    n:"Farm",    base:1100,    cps:8},
+  {id:"mine",    n:"Mine",    base:12000,   cps:47},
+  {id:"factory", n:"Factory", base:130000,  cps:260},
+  {id:"bank",    n:"Bank",    base:1400000, cps:1400},
+  {id:"temple",  n:"Temple",  base:20000000,cps:7800}
+];
+const U = [
+  {id:"u1", n:"Reinforced finger", d:"Clicks are twice as strong", cost:100,    click:2},
+  {id:"u2", n:"Steel finger",      d:"Clicks are twice as strong", cost:1000,   click:2},
+  {id:"u3", n:"Sugar rush",        d:"All baking is 25% faster",   cost:5000,   mult:1.25},
+  {id:"u4", n:"Butter blessing",   d:"All baking is 50% faster",   cost:50000,  mult:1.5},
+  {id:"u5", n:"Diamond finger",    d:"Clicks are five times as strong", cost:250000, click:5}
+];
+const KEY = "crumbclicker.v1";
+let S = {cookies:0, total:0, owned:{}, ups:[], cpsMult:1, clickMult:1, free:false, auto:0};
+let adminOK = false;
+
+const $ = id => document.getElementById(id);
+const fmt = n => {
+  if (n < 1e6) return Math.floor(n).toLocaleString();
+  const s = ["", "", "million","billion","trillion","quadrillion","quintillion","sextillion","septillion"];
+  let i = Math.min(Math.floor(Math.log10(n)/3), s.length-1);
+  return (n/Math.pow(1000,i)).toFixed(3)+" "+s[i];
+};
+const own = id => S.owned[id] || 0;
+const cost = b => S.free ? 0 : Math.ceil(b.base * Math.pow(1.15, own(b.id)));
+const upMult = () => U.filter(u => S.ups.includes(u.id) && u.mult).reduce((m,u)=>m*u.mult,1);
+const clickPower = () => U.filter(u => S.ups.includes(u.id) && u.click).reduce((m,u)=>m*u.click,1) * S.clickMult;
+const cps = () => B.reduce((t,b)=>t+own(b.id)*b.cps,0) * upMult() * S.cpsMult;
+
+function add(n){ S.cookies += n; if (n > 0) S.total += n; }
+
+function build(){
+  $("blds").innerHTML = B.map(b => `<button class="item" data-b="${b.id}"><span>${b.n}<small></small></span><b></b></button>`).join("");
+  $("ups").innerHTML = U.map(u => `<button class="item" data-u="${u.id}"><span>${u.n}<small>${u.d}</small></span><b></b></button>`).join("");
+}
+function render(){
+  $("count").textContent = fmt(S.cookies) + (Math.floor(S.cookies) === 1 ? " cookie" : " cookies");
+  $("cps").textContent = fmt(cps()) + " per second";
+  document.title = fmt(S.cookies) + " cookies - Crumb Clicker";
+  document.querySelectorAll("[data-b]").forEach(el => {
+    const b = B.find(x => x.id === el.dataset.b), c = cost(b);
+    el.disabled = S.cookies < c;
+    el.querySelector("small").textContent = (c ? fmt(c) : "free") + " cookies, +" + b.cps*upMult()*S.cpsMult + " each per second";
+    el.querySelector("b").textContent = own(b.id);
+  });
+  document.querySelectorAll("[data-u]").forEach(el => {
+    const u = U.find(x => x.id === el.dataset.u), bought = S.ups.includes(u.id);
+    el.style.display = bought ? "none" : "";
+    el.disabled = S.cookies < u.cost;
+    el.querySelector("b").textContent = fmt(u.cost);
+    el.querySelector("b").style.fontSize = "14px";
+  });
+}
+function buyB(id, n=1){ const b = B.find(x=>x.id===id); let got = 0;
+  for (let i=0;i<n;i++){ const c = cost(b); if (S.cookies < c) break; S.cookies -= c; S.owned[id] = own(id)+1; got++; }
+  return got; }
+
+$("blds").onclick = e => { const el = e.target.closest("[data-b]"); if (el){ buyB(el.dataset.b); render(); } };
+$("ups").onclick = e => { const el = e.target.closest("[data-u]"); if (!el) return;
+  const u = U.find(x=>x.id===el.dataset.u); if (S.cookies >= u.cost){ S.cookies -= u.cost; S.ups.push(u.id); render(); } };
+$("cookie").onclick = e => {
+  const p = clickPower(); add(p);
+  const f = document.createElement("div"); f.className = "float"; f.textContent = "+" + fmt(p);
+  f.style.left = (e.clientX || innerWidth/2) - 12 + "px"; f.style.top = (e.clientY || innerHeight/2) - 20 + "px";
+  document.body.appendChild(f); setTimeout(()=>f.remove(), 900); render();
+};
+
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} }
+function load(){ try{ const d = JSON.parse(localStorage.getItem(KEY)); if (d) S = Object.assign(S, d); }catch(e){} }
+$("save").onclick = () => { save(); say("Saved.", "ok"); };
+$("reset").onclick = () => { if (confirm("Delete your save and start over?")){ try{localStorage.removeItem(KEY);}catch(e){} location.reload(); } };
+
+let last = performance.now();
+setInterval(() => {
+  const now = performance.now(), dt = (now-last)/1000; last = now;
+  add(cps()*dt);
+  if (S.auto > 0) add(clickPower() * S.auto * dt);
+  render();
+}, 100);
+setInterval(save, 15000);
+
+// ---------- Admin console ----------
+const log = $("log"), cmd = $("cmd");
+function say(t, cls){ const d = document.createElement("div"); if (cls) d.className = cls; d.textContent = t; log.appendChild(d); log.scrollTop = log.scrollHeight; }
+function toggleAdmin(){
+  const a = $("admin"); const open = a.style.display !== "block";
+  a.style.display = open ? "block" : "none";
+  if (open){ if (!log.children.length) say(adminOK ? "Admin ready. Type help." : "Enter the admin password."); cmd.type = adminOK ? "text" : "password"; cmd.focus(); }
+}
+$("adm").onclick = toggleAdmin;
+addEventListener("keydown", e => { if (e.key === "`" && document.activeElement !== cmd){ e.preventDefault(); toggleAdmin(); } if (e.key === "Escape") $("admin").style.display = "none"; });
+
+const num = s => { const m = {k:1e3,m:1e6,b:1e9,t:1e12}; const x = String(s).toLowerCase(); const suf = m[x.slice(-1)];
+  return suf ? parseFloat(x)*suf : parseFloat(x); };
+const HELP = [
+ "give <n>          add cookies (accepts 5k, 2m, 3b)",
+ "take <n>          remove cookies",
+ "set <n>           set cookies to n",
+ "buy <building> <n>  add buildings for free (cursor, grandma, farm, mine, factory, bank, temple)",
+ "setb <building> <n> set exact building count",
+ "cps <x>           multiply all production by x",
+ "click <x>         multiply click power by x",
+ "auto <n>          n automatic clicks per second",
+ "free <on|off>     buildings cost nothing",
+ "unlock            unlock all upgrades",
+ "max               give 1 billion cookies",
+ "stats             show current numbers",
+ "export / import <code>  copy or load a save",
+ "save / wipe       save now / delete save and reload",
+ "clear             clear this log"
+];
+const bid = n => B.find(b => b.id === (n||"").toLowerCase() || b.n.toLowerCase() === (n||"").toLowerCase());
+function run(line){
+  const [c, a, b2] = line.trim().split(/\s+/); const x = num(a);
+  switch ((c||"").toLowerCase()){
+    case "help": HELP.forEach(h => say(h)); break;
+    case "give": if (isNaN(x)) return say("Usage: give <n>", "bad"); add(x); say("Gave " + fmt(x) + " cookies.", "ok"); break;
+    case "take": if (isNaN(x)) return say("Usage: take <n>", "bad"); S.cookies = Math.max(0, S.cookies - x); say("Took " + fmt(x) + ".", "ok"); break;
+    case "set": if (isNaN(x)) return say("Usage: set <n>", "bad"); S.cookies = x; say("Cookies set to " + fmt(x) + ".", "ok"); break;
+    case "buy": { const b = bid(a), n = isNaN(num(b2)) ? 1 : num(b2); if (!b) return say("Unknown building. Try: " + B.map(b=>b.id).join(", "), "bad");
+      S.owned[b.id] = own(b.id) + n; say("Added " + n + " " + b.n + ".", "ok"); break; }
+    case "setb": { const b = bid(a), n = num(b2); if (!b || isNaN(n)) return say("Usage: setb <building> <n>", "bad"); S.owned[b.id] = Math.max(0, n); say(b.n + " set to " + n + ".", "ok"); break; }
+    case "cps": if (isNaN(x)) return say("Usage: cps <x>", "bad"); S.cpsMult = x; say("Production multiplier is now x" + x + ".", "ok"); break;
+    case "click": if (isNaN(x)) return say("Usage: click <x>", "bad"); S.clickMult = x; say("Click multiplier is now x" + x + ".", "ok"); break;
+    case "auto": if (isNaN(x)) return say("Usage: auto <n>", "bad"); S.auto = Math.max(0, x); say("Auto clicks: " + S.auto + " per second.", "ok"); break;
+    case "free": S.free = (a || "on").toLowerCase() !== "off"; say("Free buildings " + (S.free ? "on" : "off") + ".", "ok"); break;
+    case "unlock": U.forEach(u => { if (!S.ups.includes(u.id)) S.ups.push(u.id); }); say("All upgrades unlocked.", "ok"); break;
+    case "max": add(1e9); say("Added 1 billion cookies.", "ok"); break;
+    case "stats": say("Cookies " + fmt(S.cookies) + " | Baked all time " + fmt(S.total) + " | " + fmt(cps()) + "/s | Click " + fmt(clickPower())); break;
+    case "export": { const code = btoa(JSON.stringify(S)); say(code); if (navigator.clipboard) navigator.clipboard.writeText(code).then(()=>say("Copied.", "ok"), ()=>{}); break; }
+    case "import": try{ S = Object.assign(S, JSON.parse(atob(a))); say("Save imported.", "ok"); }catch(e){ say("That code is not valid.", "bad"); } break;
+    case "save": save(); say("Saved.", "ok"); break;
+    case "wipe": try{localStorage.removeItem(KEY);}catch(e){} location.reload(); break;
+    case "clear": log.innerHTML = ""; break;
+    case "": break;
+    default: say("Unknown command. Type help.", "bad");
+  }
+  render();
+}
+cmd.addEventListener("keydown", e => {
+  if (e.key !== "Enter") return;
+  const v = cmd.value; cmd.value = "";
+  if (!adminOK){
+    if (v === ADMIN_PASSWORD){ adminOK = true; cmd.type = "text"; say("Access granted. Type help.", "ok"); }
+    else say("Wrong password.", "bad");
+    return;
+  }
+  say("> " + v); run(v);
+});
+
+load(); build(); render();
+</script>
+</body>
+</html>
